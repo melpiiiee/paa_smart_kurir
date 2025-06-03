@@ -1,23 +1,20 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="id">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Smart Kurir</title>
+  <meta charset="UTF-8">
+  <title>Simulasi Smart Kurir</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <h1>Smart Kurir</h1>
+  <h1>Simulasi Smart Kurir 🚚</h1>
 
-  <input type="file" id="mapInput" accept="image/*">
-  <button onclick="loadMap()">Muat Gambar</button>
-  <button onclick="generateRandomMap()">Acak Map</button>
-  <button onclick="setRandomStartFinish()">Acak Posisi</button>
-  <button onclick="startKurir()">Mulai</button>
-  <button onclick="stopKurir()">Berhenti</button>
+  <div class="controls">
+    <input type="file" id="mapLoader" accept="image/*">
+    <button onclick="randomizePositions()">Acak Kurir & Tujuan</button>
+    <button onclick="startSimulation()">Mulai</button>
+  </div>
 
-  <br><br>
-  <canvas id="mapCanvas" width="600" height="400"></canvas>
+  <canvas id="mapCanvas"></canvas>
 
   <script src="script.js"></script>
 </body>

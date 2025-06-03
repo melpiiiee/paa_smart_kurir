@@ -1,205 +1,293 @@
 const canvas = document.getElementById('mapCanvas');
 const ctx = canvas.getContext('2d');
+let mapImage = new Image();
+let imageData;
+let courier = { x: null, y: null, angle: 0 };
+let pickup = { x: null, y: null };
+let goal = { x: null, y: null };
+let mapLoaded = false;
+const cellSize = 5;
+let animationId = null;
 
-const gridSize = 20;
-const rows = canvas.height / gridSize;
-const cols = canvas.width / gridSize;
-
-let grid = [];
-let start = null;
-let finish = null;
-let path = [];
-let interval = null;
-let modeGambar = false;
-let mapImage = null;
-
-function loadMap() {
-  const file = document.getElementById('mapInput').files[0];
-  if (!file) return;
-
-  const reader = new FileReader();
-  reader.onload = function (e) {
-    const img = new Image();
-    img.onload = function () {
-      mapImage = img;
-      modeGambar = true;
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-      generateGridFromImage();
+document.getElementById('mapLoader').addEventListener('change', function (e) {
+  const file = e.target.files[0];
+  if (file) {
+    const reader = new FileReader();
+    reader.onload = function (event) {
+      mapImage.onload = function () {
+        canvas.width = Math.min(Math.max(mapImage.width, 1000), 1500);
+        canvas.height = Math.min(Math.max(mapImage.height, 700), 1000);
+        ctx.drawImage(mapImage, 0, 0, canvas.width, canvas.height);
+        imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        mapLoaded = true;
+        drawScene();
+      };
+      mapImage.src = event.target.result;
     };
-    img.src = e.target.result;
+    reader.readAsDataURL(file);
+  }
+});
+
+function isRoad(x, y) {
+  const index = (Math.floor(y) * canvas.width + Math.floor(x)) * 4;
+  const r = imageData.data[index];
+  const g = imageData.data[index + 1];
+  const b = imageData.data[index + 2];
+  return r >= 90 && r <= 150 && g >= 90 && g <= 150 && b >= 90 && b <= 150;
+}
+
+function getRandomRoadPosition() {
+  let x, y, tries = 0;
+  do {
+    x = Math.random() * canvas.width;
+    y = Math.random() * canvas.height;
+    tries++;
+    if (tries > 5000) {
+      alert("Tidak ditemukan jalan yang valid!");
+      return { x: 0, y: 0 };
+    }
+  } while (!isRoad(x, y));
+  return { x, y };
+}
+
+function toGridCoord(x, y) {
+  return {
+    gx: Math.floor(x / cellSize),
+    gy: Math.floor(y / cellSize)
   };
-  reader.readAsDataURL(file);
 }
 
-function generateGridFromImage() {
-  grid = Array.from({ length: rows }, () => Array(cols).fill(0));
-  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
-
-  for (let y = 0; y < rows; y++) {
-    for (let x = 0; x < cols; x++) {
-      const idx = ((y * gridSize) * canvas.width + (x * gridSize)) * 4;
-      const r = imageData[idx], g = imageData[idx + 1], b = imageData[idx + 2];
-      const brightness = (r + g + b) / 3;
-      if (brightness < 100) grid[y][x] = 1;
-    }
-  }
-
-  drawMap();
+function fromGridCoord(gx, gy) {
+  return {
+    x: gx * cellSize + cellSize / 2,
+    y: gy * cellSize + cellSize / 2
+  };
 }
 
-function generateRandomMap() {
-  modeGambar = false;
-  mapImage = null;
-  grid = Array.from({ length: rows }, () =>
-    Array.from({ length: cols }, () => (Math.random() < 0.2 ? 1 : 0))
-  );
-  drawMap();
+function heuristic(a, b) {
+  return Math.abs(a.gx - b.gx) + Math.abs(a.gy - b.gy);
 }
 
-function setRandomStartFinish() {
-  if (grid.length === 0) return;
+function aStar(start, end) {
+  const cols = Math.floor(canvas.width / cellSize);
+  const rows = Math.floor(canvas.height / cellSize);
 
-  do {
-    start = {
-      x: Math.floor(Math.random() * cols),
-      y: Math.floor(Math.random() * rows)
-    };
-  } while (grid[start.y][start.x] === 1);
+  const openSet = new Set([`${start.gx},${start.gy}`]);
+  const cameFrom = new Map();
 
-  do {
-    finish = {
-      x: Math.floor(Math.random() * cols),
-      y: Math.floor(Math.random() * rows)
-    };
-  } while (
-    grid[finish.y][finish.x] === 1 ||
-    (finish.x === start.x && finish.y === start.y)
-  );
+  const gScore = Array.from({ length: rows }, () => Array(cols).fill(Infinity));
+  gScore[start.gy][start.gx] = 0;
 
-  drawMap();
-}
+  const fScore = Array.from({ length: rows }, () => Array(cols).fill(Infinity));
+  fScore[start.gy][start.gx] = heuristic(start, end);
 
-function drawMap() {
-  if (modeGambar && mapImage) {
-    ctx.drawImage(mapImage, 0, 0, canvas.width, canvas.height);
-  } else {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    for (let y = 0; y < rows; y++) {
-      for (let x = 0; x < cols; x++) {
-        if (grid[y][x] === 1) {
-          ctx.fillStyle = 'black';
-          ctx.fillRect(x * gridSize, y * gridSize, gridSize, gridSize);
-        }
-      }
-    }
-  }
-
-  if (start) {
-    ctx.fillStyle = 'yellow';
-    ctx.fillRect(start.x * gridSize, start.y * gridSize, gridSize, gridSize);
-  }
-
-  if (finish) {
-    ctx.fillStyle = 'red';
-    ctx.fillRect(finish.x * gridSize, finish.y * gridSize, gridSize, gridSize);
-  }
-}
-
-function drawRotatedEquilateralTriangle(x, y, angle, color) {
-  const cx = x * gridSize + gridSize / 2;
-  const cy = y * gridSize + gridSize / 2;
-  const side = gridSize * 0.9;
-  const h = (Math.sqrt(3) / 2) * side;
-
-  ctx.save();
-  ctx.translate(cx, cy);
-  ctx.rotate(angle);
-  ctx.fillStyle = color;
-  ctx.beginPath();
-  ctx.moveTo(0, -h / 2); // This is the top (pointed) vertex
-  ctx.lineTo(side / 2, h / 2);
-  ctx.lineTo(-side / 2, h / 2);
-  ctx.closePath();
-  ctx.fill();
-  ctx.restore();
-}
-
-function startKurir() {
-  if (!start || !finish) return;
-  path = findPath(start, finish);
-  if (path.length === 0) {
-    alert("Tidak ditemukan jalur!");
-    return;
-  }
-
-  let i = 0;
-  interval = setInterval(() => {
-    drawMap();
-
-    for (let j = 0; j <= i; j++) {
-      const pos = path[j];
-      ctx.fillStyle = '#a5d6a7';
-      ctx.fillRect(pos.x * gridSize, pos.y * gridSize, gridSize, gridSize);
-    }
-
-    if (i < path.length - 1) {
-      const curr = path[i];
-      const next = path[i + 1];
-      const dx = next.x - curr.x;
-      const dy = next.y - curr.y;
-      const angle = Math.atan2(dy, dx);
-
-      drawRotatedEquilateralTriangle(curr.x, curr.y, angle, '#00c853');
-      i++;
-    } else {
-      drawRotatedEquilateralTriangle(path[i].x, path[i].y, 0, '#00c853');
-      clearInterval(interval);
-    }
-  }, 120);
-}
-
-function stopKurir() {
-  clearInterval(interval);
-  drawMap();
-}
-
-function findPath(start, finish) {
-  const visited = Array.from({ length: rows }, () => Array(cols).fill(false));
-  const prev = Array.from({ length: rows }, () => Array(cols).fill(null));
-  const queue = [start];
-  visited[start.y][start.x] = true;
-
-  const dirs = [
-    { x: 0, y: -1 }, { x: 1, y: 0 },
-    { x: 0, y: 1 }, { x: -1, y: 0 }
+  const directions = [
+    { dx: 1, dy: 0 }, { dx: -1, dy: 0 },
+    { dx: 0, dy: 1 }, { dx: 0, dy: -1 }
   ];
 
-  while (queue.length > 0) {
-    const curr = queue.shift();
-    if (curr.x === finish.x && curr.y === finish.y) {
-      let path = [];
-      let node = curr;
-      while (node) {
-        path.push(node);
-        node = prev[node.y][node.x];
+  while (openSet.size > 0) {
+    let current = null;
+    let lowestFScore = Infinity;
+
+    for (const coord of openSet) {
+      const [gx, gy] = coord.split(',').map(Number);
+      if (fScore[gy][gx] < lowestFScore) {
+        lowestFScore = fScore[gy][gx];
+        current = { gx, gy };
       }
-      return path.reverse();
     }
 
-    for (let d of dirs) {
-      const nx = curr.x + d.x;
-      const ny = curr.y + d.y;
+    if (current.gx === end.gx && current.gy === end.gy) {
+      const path = [];
+      let curr = current;
+      while (cameFrom.has(`${curr.gx},${curr.gy}`)) {
+        path.unshift(curr);
+        curr = cameFrom.get(`${curr.gx},${curr.gy}`);
+      }
+      path.unshift(start);
+      return path;
+    }
+
+    openSet.delete(`${current.gx},${current.gy}`);
+
+    for (const { dx, dy } of directions) {
+      const neighbor = {
+        gx: current.gx + dx,
+        gy: current.gy + dy
+      };
 
       if (
-        nx >= 0 && ny >= 0 && nx < cols && ny < rows &&
-        !visited[ny][nx] && grid[ny][nx] === 0
-      ) {
-        visited[ny][nx] = true;
-        prev[ny][nx] = curr;
-        queue.push({ x: nx, y: ny });
+        neighbor.gx < 0 || neighbor.gy < 0 ||
+        neighbor.gx >= cols || neighbor.gy >= rows
+      ) continue;
+
+      const pixel = fromGridCoord(neighbor.gx, neighbor.gy);
+      if (!isRoad(pixel.x, pixel.y)) continue;
+
+      const tentativeGScore = gScore[current.gy][current.gx] + 1;
+      if (tentativeGScore < gScore[neighbor.gy][neighbor.gx]) {
+        cameFrom.set(`${neighbor.gx},${neighbor.gy}`, current);
+        gScore[neighbor.gy][neighbor.gx] = tentativeGScore;
+        fScore[neighbor.gy][neighbor.gx] = tentativeGScore + heuristic(neighbor, end);
+        openSet.add(`${neighbor.gx},${neighbor.gy}`);
       }
     }
   }
 
   return [];
+}
+
+function smoothPath(path) {
+  if (path.length < 3) return path;
+
+  const smoothed = [path[0]];
+  for (let i = 1; i < path.length - 1; i++) {
+    const prev = smoothed[smoothed.length - 1];
+    const curr = path[i];
+    const next = path[i + 1];
+
+    const dx1 = curr.gx - prev.gx;
+    const dy1 = curr.gy - prev.gy;
+    const dx2 = next.gx - curr.gx;
+    const dy2 = next.gy - curr.gy;
+
+    // Jika arah berubah, tambahkan titik saat ini
+    if (dx1 !== dx2 || dy1 !== dy2) {
+      smoothed.push(curr);
+    }
+  }
+  smoothed.push(path[path.length - 1]);
+  return smoothed;
+}
+
+function randomizePositions() {
+  if (!mapLoaded) return alert('Load peta terlebih dahulu!');
+
+  // Hentikan animasi jika sedang berjalan
+  if (animationId) {
+    cancelAnimationFrame(animationId);
+    animationId = null;
+  }
+
+  courier = { ...getRandomRoadPosition(), angle: 0 };
+  pickup = getRandomRoadPosition();
+  goal = getRandomRoadPosition();
+  drawScene();
+}
+
+function drawCourier() {
+  if (courier.x === null) return;
+  const { x, y, angle } = courier;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(angle);
+  ctx.beginPath();
+  ctx.moveTo(10, 0);
+  ctx.lineTo(-7, -7);
+  ctx.lineTo(-7, 7);
+  ctx.closePath();
+  ctx.fillStyle = 'blue';
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawFlag(pos, color) {
+  if (pos.x === null) return;
+  ctx.beginPath();
+  ctx.arc(pos.x, pos.y, 8, 0, Math.PI * 2);
+  ctx.fillStyle = color;
+  ctx.fill();
+}
+
+function drawScene() {
+  ctx.drawImage(mapImage, 0, 0, canvas.width, canvas.height);
+  drawFlag(pickup, 'yellow');
+  drawFlag(goal, 'red');
+  drawCourier();
+}
+
+function startSimulation() {
+  if (!mapLoaded) return alert('Load peta terlebih dahulu!');
+
+  // Hentikan animasi sebelumnya jika ada
+  if (animationId) {
+    cancelAnimationFrame(animationId);
+    animationId = null;
+  }
+
+  const startGrid = toGridCoord(courier.x, courier.y);
+  const pickupGrid = toGridCoord(pickup.x, pickup.y);
+  const goalGrid = toGridCoord(goal.x, goal.y);
+
+  const toPickup = aStar(startGrid, pickupGrid);
+  const toGoal = aStar(pickupGrid, goalGrid);
+
+  if (toPickup.length === 0 || toGoal.length === 0) {
+    alert('Jalur tidak ditemukan!');
+    return;
+  }
+
+  const rawPath = [...toPickup.slice(0, -1), ...toGoal]; // Gabung path, hindari duplikasi titik tengah
+  const smoothedPath = smoothPath(rawPath);
+  if (smoothedPath.length === 0) return;
+
+  const waypoints = smoothedPath.map(point => fromGridCoord(point.gx, point.gy));
+  let currentWaypointIndex = 0;
+  let lastTimestamp = 0;
+  const speed = 0.1; // pixel per ms
+  const rotationSpeed = 0.1; // radians per ms (adjust for faster/slower rotation)
+
+  function animate(timestamp) {
+    if (!lastTimestamp) lastTimestamp = timestamp;
+    const deltaTime = timestamp - lastTimestamp;
+    lastTimestamp = timestamp;
+
+    // Lewati jika deltaTime terlalu besar (tab berpindah)
+    if (deltaTime > 100) {
+      animationId = requestAnimationFrame(animate);
+      return;
+    }
+
+    // Jika sudah mencapai semua waypoint
+    if (currentWaypointIndex >= waypoints.length) {
+      drawScene();
+      return;
+    }
+
+    const target = waypoints[currentWaypointIndex];
+    const dx = target.x - courier.x;
+    const dy = target.y - courier.y;
+    const distance = Math.hypot(dx, dy);
+
+    // Hitung sudut target
+    const targetAngle = Math.atan2(dy, dx);
+    let angleDiff = targetAngle - courier.angle;
+
+    // Normalisasi sudut
+    if (angleDiff > Math.PI) angleDiff -= 2 * Math.PI;
+    if (angleDiff < -Math.PI) angleDiff += 2 * Math.PI;
+
+    // Rotasi kurir
+    const rotateAmount = angleDiff * Math.min(1, rotationSpeed * deltaTime); // Limit rotation speed
+    courier.angle += rotateAmount;
+
+    // Pindahkan kurir
+    const moveDistance = speed * deltaTime;
+    const ratio = Math.min(moveDistance / distance, 1);
+    courier.x += dx * ratio;
+    courier.y += dy * ratio;
+
+    // Jika sudah dekat, langsung ke waypoint berikutnya
+    if (distance < 2) {
+      courier.x = target.x;
+      courier.y = target.y;
+      currentWaypointIndex++;
+    }
+
+    drawScene();
+    animationId = requestAnimationFrame(animate);
+  }
+
+  animationId = requestAnimationFrame(animate);
 }
